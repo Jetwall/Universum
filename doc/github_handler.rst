@@ -46,6 +46,8 @@ web-hook event (passed via "x-github-event" header) and payload content. If a ne
 it sends a request to GitHub to create one. If the `check run` is already created, it parses the required parameters
 and triggers the set up automation server to run a previously described check by Universum in 'main' mode (see above).
 
+See example of such Jenkins job `in the next section <Jenkins jobs example_>`_.
+
 The following picture represents the event sequence leading to check result for a commit displayed on GitHub:
 
 *(picture here)*
@@ -71,118 +73,123 @@ After this, check result can be viewed directly on GitHub.
     GitHub also sends web-hook payloads on other events (such as *'check run completed'*), that are
     currently ignored by GitHub Handler
 
-.. WIP
 
-(GITHUB_APP_ID is hardcoded to both jobs; KEY_FILE is private key, assossiated with this exact ID)
+Jenkins jobs example
+--------------------
 
-DSL script for checks job::
+Here's DSL script for GitHub Handler::
 
-      pipelineJob('Check commit') {
-        authenticationToken("GITHUB")
-        parameters {
-          stringParam("GIT_REPO", "", "")
-          stringParam("GITHUB_APP_ID", "1234", "")
-          stringParam("GIT_REFSPEC", "", "")
-          stringParam("GIT_CHECKOUT_ID", "", "")
-          stringParam("GITHUB_INSTALLATION_ID", "", "")
-          stringParam("GITHUB_CHECK_ID", "", "")
-          stringParam("CONFIG_PATH", "configs.py", "")
+    pipelineJob('GitHub Webhook handler') {
+      triggers {
+        genericTrigger {
+          genericVariables {
+            genericVariable {
+              key("GITHUB_PAYLOAD")
+              value("\$")
+            }
+          }
+          genericHeaderVariables {
+            genericHeaderVariable {
+              key("x-github-event")
+              regexpFilter("")
+            }
+          }
+          causeString('Event "\^${x_github_event}", action "\^${GITHUB_PAYLOAD_action}"')
+          token('UniversumGitHub')
+          printContributedVariables(false)
+          printPostContent(false)
+          silentResponse(false)
+          regexpFilterText("")
+          regexpFilterExpression("")
         }
-        definition {
-          cps {
-            script("""\
-              pipeline {
-                agent any
-                environment {
-                  KEY_FILE = credentials('github-private-key')
-                  GITHUB_PRIVATE_KEY = "@\^${KEY_FILE}"
-                }
-                stages {
-                  stage ('test') {
-                    steps {
-                      cleanWs()
-                      ansiColor('xterm') {
-                        sh "python3.7 -m universum --no-diff -vt github --report-to-review -rst -rsu -rof"
-                      }
-                      junit '**/junit_results.xml'
-                      junit '**/TEST*.xml'
+      }
+      parameters {
+        stringParam("GITHUB_APP_ID", "1234", "")
+        stringParam("TRIGGER_URL", "https://my.jenkins-server.com/buildByToken/buildWithParameters?job=Check%20commit&token=GITHUB", "")
+      }
+      definition {
+        cps {
+          script("""\
+            pipeline {
+              agent any
+              environment {
+                KEY_FILE = credentials('github-private-key')
+                GITHUB_PRIVATE_KEY = "@\^${KEY_FILE}"
+              }
+              stages {
+                stage ('Run GitHub Handler') {
+                  steps {
+                    ansiColor('xterm') {
+                      sh("python3.7 -m universum github-handler -e \^${x_github_event}")
                     }
                   }
                 }
-                post {
-                  always {
-                    archiveArtifacts 'artifacts/*'
+              }
+            }
+          """.stripIndent())
+          sandbox()
+        }
+      }
+    }
+
+And here's DSL script for the job it triggers::
+
+    pipelineJob('Check commit') {
+      authenticationToken("GITHUB")
+      parameters {
+        stringParam("GIT_REPO", "", "")
+        stringParam("GITHUB_APP_ID", "1234", "")
+        stringParam("GIT_REFSPEC", "", "")
+        stringParam("GIT_CHECKOUT_ID", "", "")
+        stringParam("GITHUB_INSTALLATION_ID", "", "")
+        stringParam("GITHUB_CHECK_ID", "", "")
+        stringParam("CONFIG_PATH", "configs.py", "")
+      }
+      definition {
+        cps {
+          script("""\
+            pipeline {
+              agent any
+              environment {
+                KEY_FILE = credentials('github-private-key')
+                GITHUB_PRIVATE_KEY = "@\^${KEY_FILE}"
+              }
+              stages {
+                stage ('test') {
+                  steps {
                     cleanWs()
-                  }
-                }
-              }
-            """.stripIndent())
-            sandbox()
-          }
-        }
-      }
-
-DSL script for GitHub Handler::
-
-      pipelineJob('GitHub Webhook handler') {
-        triggers {
-          genericTrigger {
-            genericVariables {
-              genericVariable {
-                key("GITHUB_PAYLOAD")
-                value("\$")
-              }
-            }
-            genericHeaderVariables {
-              genericHeaderVariable {
-                key("x-github-event")
-                regexpFilter("")
-              }
-            }
-            causeString('Event "\^${x_github_event}", action "\^${GITHUB_PAYLOAD_action}"')
-            token('UniversumGitHub')
-            printContributedVariables(false)
-            printPostContent(false)
-            silentResponse(false)
-            regexpFilterText("")
-            regexpFilterExpression("")
-          }
-        }
-        parameters {
-          stringParam("GITHUB_APP_ID", "1234", "")
-          stringParam("TRIGGER_URL", "https://my.jenkins-server.com/buildByToken/buildWithParameters?job=Check%20commit&token=GITHUB", "")
-        }
-        definition {
-          cps {
-            script("""\
-              pipeline {
-                agent any
-                environment {
-                  KEY_FILE = credentials('github-private-key')
-                  GITHUB_PRIVATE_KEY = "@\^${KEY_FILE}"
-                }
-                stages {
-                  stage ('Run GitHub Handler') {
-                    steps {
-                      ansiColor('xterm') {
-                        sh("python3.7 -m universum github-handler -e \^${x_github_event}")
-                      }
+                    ansiColor('xterm') {
+                      sh "python3.7 -m universum --no-diff -vt github --report-to-review -rst -rsu -rof"
                     }
+                    junit '**/junit_results.xml'
+                    junit '**/TEST*.xml'
                   }
                 }
               }
-            """.stripIndent())
-            sandbox()
-          }
+              post {
+                always {
+                  archiveArtifacts 'artifacts/*'
+                  cleanWs()
+               }
+              }
+            }
+          """.stripIndent())
+          sandbox()
         }
       }
-      
-Plugins used:
-        - configuration-as-code
-        - job-dsl
-        - workflow-aggregator
-        - generic-webhook-trigger
-        - ansicolor
-        - ws-cleanup
-        - junit
-        - build-token-root
+    }
+
+.. note::
+
+    Here GITHUB_APP_ID is once retrieved from GitHub Application settings and hardcoded to both jobs;
+    and KEY_FILE is a private key, associated with this exact ID and stored in Jenkins credentials
+
+Jenkins plugins used for these jobs:
+    - configuration-as-code
+    - job-dsl
+    - workflow-aggregator
+    - generic-webhook-trigger
+    - ansicolor
+    - ws-cleanup
+    - junit
+    - build-token-root
